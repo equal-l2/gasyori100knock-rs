@@ -42,6 +42,14 @@ struct Transformed {
     bytes: Vec<u8>,
 }
 
+fn diff<T: PartialOrd + std::ops::Sub<Output = T>>(a: T, b: T) -> T {
+    if a > b {
+        a - b
+    } else {
+        b - a
+    }
+}
+
 fn main() {
     let args = read_args();
 
@@ -74,7 +82,44 @@ fn main() {
         // q2
         to_grayscale,
         // q3
-        |info, bytes| binarize(info, bytes, 128),
+        |info, bytes| {
+            let Transformed { info, bytes } = to_grayscale(info, bytes);
+            binarize(info, bytes, 128)
+        },
+        // q4
+        |info, bytes| {
+            let gray = to_grayscale(info, bytes);
+            let histo = {
+                let mut bins = [0usize; 256];
+                for i in &gray.bytes {
+                    bins[*i as usize] += 1;
+                }
+                bins
+            };
+
+            let (best_thres, _) = (0..=255).map(|n| {
+                let sum_l: usize = histo[0..n].into_iter().sum();
+                let sum_r: usize = histo[n..].into_iter().sum();
+                let mulsum_l: usize = histo[0..n].into_iter().zip(0..n).map(|(x, y)| x * y).sum();
+                let mulsum_r: usize = histo[n..255].into_iter().zip(n..255).map(|(x, y)| x * y).sum();
+                let summul = sum_l * sum_r;
+                if summul != 0 {
+                    let dividend = (diff(sum_l * mulsum_r, sum_r * mulsum_l) as f64).powi(2);
+                    let res = dividend / summul as f64;
+                    Some((n, res))
+                } else {
+                    None
+                }
+            })
+            .filter(Option::is_some)
+            .flatten()
+            .max_by(|(_, v1), (_, v2)| v1.partial_cmp(v2).expect("encountered NaN"))
+            .expect("Failed to find threshold");
+
+            println!("threshold: {}", best_thres);
+
+            binarize(gray.info, gray.bytes, best_thres as u8)
+        },
     ];
 
     let trans = funcs
@@ -149,14 +194,13 @@ fn to_grayscale(info: Info, bytes: Vec<u8>) -> Transformed {
 }
 
 fn binarize(info: Info, bytes: Vec<u8>, threshold: u8) -> Transformed {
-    let gray = to_grayscale(info, bytes);
-    let out = gray
-        .bytes
+    assert_eq!(info.color, png::ColorType::Grayscale);
+    let out = bytes
         .into_iter()
         .map(|value| if value < threshold { 0 } else { 255 })
         .collect();
     Transformed {
-        info: gray.info,
+        info: info,
         bytes: out,
     }
 }
